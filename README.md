@@ -11,6 +11,16 @@ nix run github:nakasyou/codex-transcribe -- recording.wav --json
 
 Requires Nix with flakes enabled and a ChatGPT login from `codex login`. Linux and macOS on x86_64 and aarch64 are configured; x86_64 Linux is verified.
 
+## Split long recordings
+
+```sh
+nix run github:nakasyou/codex-transcribe -- recording.m4a --language ja --split 60
+```
+
+`--split <seconds>` converts the first audio track to mono 16 kHz PCM WAV chunks with ffmpeg and transcribes them sequentially. Chunk lengths are approximate at audio packet boundaries. The final short chunk is included. Text is joined with newlines in recording order; `--json` returns `{ text, chunks }`, preserving each chunk's API response. There is no overlap between chunks, so words at a boundary can lose context. If a chunk fails, the command exits with an error identifying that chunk. Temporary audio files are removed on success or failure.
+
+The Nix package includes ffmpeg. When running directly with Bun or Node, install ffmpeg on your PATH.
+
 ## Run with Bun
 
 ```sh

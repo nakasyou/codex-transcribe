@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
-import { parseArgs } from 'node:util'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { homedir, tmpdir } from 'node:os'
+import { basename, join, resolve } from 'node:path'
+import { parseArgs, promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
 export interface TranscribeOptions {
@@ -11,6 +12,7 @@ export interface TranscribeOptions {
   codexHome?: string
   baseUrl?: string
   timeoutMs?: number
+  splitSeconds?: number
 }
 
 export interface Transcription {
@@ -18,6 +20,7 @@ export interface Transcription {
   asset_pointer?: string
   asset_ttl?: string
   asset_format?: string
+  chunks?: Transcription[]
 }
 
 interface Auth {
@@ -56,6 +59,74 @@ export async function readAuth(codexHome: string): Promise<Auth> {
 export async function transcribe(
   audioPath: string,
   options: TranscribeOptions = {},
+): Promise<Transcription> {
+  if (options.splitSeconds === undefined) return transcribeFile(audioPath, options)
+  const seconds = options.splitSeconds
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error('--split must be a positive number of seconds.')
+  }
+  const directory = await mkdtemp(join(tmpdir(), 'codex-transcribe-'))
+  try {
+    try {
+      await promisify(execFile)('ffmpeg', [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-nostdin',
+        '-i',
+        resolve(audioPath),
+        '-map',
+        '0:a:0',
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        '-c:a',
+        'pcm_s16le',
+        '-f',
+        'segment',
+        '-segment_time',
+        String(seconds),
+        '-reset_timestamps',
+        '1',
+        join(directory, 'chunk-%09d.wav'),
+      ])
+    } catch (error) {
+      const missing = error instanceof Error && 'code' in error && error.code === 'ENOENT'
+      throw new Error(
+        missing
+          ? 'ffmpeg is required for --split. Install ffmpeg or use the Nix package.'
+          : 'Unable to split the audio file with ffmpeg. Check that it contains readable audio.',
+      )
+    }
+    const files = (await readdir(directory)).filter((file) => /^chunk-\d+\.wav$/.test(file)).sort()
+    if (!files.length) throw new Error('No audio chunks were produced.')
+    const chunks: Transcription[] = []
+    for (const [index, file] of files.entries()) {
+      try {
+        chunks.push(await transcribeFile(join(directory, file), options))
+      } catch (error) {
+        throw new Error(
+          `Chunk ${index + 1}/${files.length} failed: ${error instanceof Error ? error.message : 'Transcription failed.'}`,
+        )
+      }
+    }
+    return {
+      text: chunks
+        .map((chunk) => chunk.text.trim())
+        .filter(Boolean)
+        .join('\n'),
+      chunks,
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+async function transcribeFile(
+  audioPath: string,
+  options: TranscribeOptions,
 ): Promise<Transcription> {
   const baseUrl =
     options.baseUrl ?? process.env.CODEX_API_BASE_URL ?? 'https://chatgpt.com/backend-api'
@@ -133,6 +204,7 @@ const help = `Usage: codex-transcribe <audio-file> [options]
 
 Options:
   --language <code>     Language hint (e.g. ja, en)
+  --split <seconds>     Split audio into chunks and transcribe them in order (requires ffmpeg)
   --json                Print the full JSON response
   --codex-home <path>   Authentication directory (default: CODEX_HOME or ~/.codex)
   --base-url <url>      API base URL (default: CODEX_API_BASE_URL or https://chatgpt.com/backend-api)
@@ -146,6 +218,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     allowPositionals: true,
     options: {
       language: { type: 'string' },
+      split: { type: 'string' },
       json: { type: 'boolean' },
       'codex-home': { type: 'string' },
       'base-url': { type: 'string' },
@@ -159,6 +232,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   if (positionals.length !== 1) throw new Error(help)
   const result = await transcribe(positionals[0]!, {
     language: values.language,
+    splitSeconds: values.split === undefined ? undefined : Number(values.split),
     codexHome: values['codex-home'],
     baseUrl: values['base-url'],
   })

@@ -26,7 +26,8 @@
               runHook preInstall
               install -Dm644 codex-transcribe.js $out/libexec/codex-transcribe/index.js
               makeWrapper ${pkgs.bun}/bin/bun $out/bin/codex-transcribe \
-                --add-flags "$out/libexec/codex-transcribe/index.js"
+                --add-flags "$out/libexec/codex-transcribe/index.js" \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg-headless ]}
               runHook postInstall
             '';
             meta = {
@@ -47,6 +48,6 @@
       });
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };
-        in { default = pkgs.mkShell { packages = [ pkgs.bun pkgs.nodejs ]; }; });
+        in { default = pkgs.mkShell { packages = [ pkgs.bun pkgs.nodejs pkgs.ffmpeg-headless ]; }; });
     };
 }
