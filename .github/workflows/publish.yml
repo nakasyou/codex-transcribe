@@ -1,0 +1,81 @@
+name: Publish
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increment
+        required: true
+        type: choice
+        options: [major, minor, patch]
+permissions:
+  contents: write
+  id-token: write
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@latest
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.13'
+      - run: bun install --frozen-lockfile
+      - name: Calculate release version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          case "$BUMP" in major|minor|patch) ;; *) exit 1 ;; esac
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          if ! CURRENT=$(npm view "$PACKAGE_NAME" version); then
+            echo "An initial npm publication is required before this workflow can increment a release."
+            exit 1
+          fi
+          if ! [[ "$CURRENT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "npm did not return a stable semantic version."
+            exit 1
+          fi
+          npm version "$CURRENT" --no-git-tag-version --allow-same-version
+          npm version "$BUMP" --no-git-tag-version
+          bun install
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+      - run: bun run fmt && bun run check && bun test && bun run build
+      - name: Check availability and prepare commit
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          if npm view "$PACKAGE_NAME@$VERSION" version > /dev/null 2>&1; then
+            echo "Version already exists on npm."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
+            echo "Tag already exists."
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json bun.lock
+          git commit -m "Release $TAG"
+          git tag -a "$TAG" -m "Release $TAG"
+      - run: npm publish --access public
+      - name: Push and create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git push origin HEAD "refs/tags/$TAG"
+          gh release create "$TAG" --verify-tag --generate-notes

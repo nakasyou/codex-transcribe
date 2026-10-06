@@ -1,0 +1,41 @@
+{
+  "name": "@nakasyou/codex-transcribe",
+  "version": "0.1.0",
+  "description": "Transcribe audio using your local Codex ChatGPT authentication",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nakasyou/codex-transcribe.git"
+  },
+  "bin": {
+    "codex-transcribe": "./dist/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "build": "vp pack",
+    "check": "vp check",
+    "lint": "vp lint",
+    "fmt": "vp fmt . --write",
+    "format": "vp fmt . --write",
+    "test": "bun test",
+    "prepublishOnly": "bun run check && bun test && bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "5.9.3",
+    "vite-plus": "^1.0.0"
+  }
+}
