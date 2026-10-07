@@ -13,6 +13,7 @@ export interface TranscribeOptions {
   baseUrl?: string
   timeoutMs?: number
   splitSeconds?: number
+  onChunk?: (chunk: Transcription, index: number) => void | Promise<void>
 }
 
 export interface Transcription {
@@ -105,7 +106,9 @@ export async function transcribe(
     const chunks: Transcription[] = []
     for (const [index, file] of files.entries()) {
       try {
-        chunks.push(await transcribeFile(join(directory, file), options))
+        const chunk = await transcribeFile(join(directory, file), options)
+        chunks.push(chunk)
+        await options.onChunk?.(chunk, index)
       } catch (error) {
         throw new Error(
           `Chunk ${index + 1}/${files.length} failed: ${error instanceof Error ? error.message : 'Transcription failed.'}`,
@@ -235,8 +238,15 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     splitSeconds: values.split === undefined ? undefined : Number(values.split),
     codexHome: values['codex-home'],
     baseUrl: values['base-url'],
+    onChunk:
+      !values.json && values.split !== undefined
+        ? (chunk) => {
+            if (chunk.text.trim()) console.log(chunk.text.trim())
+          }
+        : undefined,
   })
-  console.log(values.json ? JSON.stringify(result, null, 2) : result.text)
+  if (values.json) console.log(JSON.stringify(result, null, 2))
+  else if (values.split === undefined) console.log(result.text)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {

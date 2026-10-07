@@ -193,3 +193,99 @@ test('rejects invalid split durations before processing audio', async () => {
     await rejects(transcribe('unused.wav', { splitSeconds: seconds }), /positive number of seconds/)
   }
 })
+
+test('CLI streams the first chunk before the second finishes and never duplicates output', async () => {
+  const directory = await fixture({ tokens: { access_token: 'test-token' } })
+  await writeFile(join(directory, 'voice.wav'), wav(1.5))
+  let releaseSecond!: () => void
+  const secondReady = new Promise<void>((resolve) => {
+    releaseSecond = resolve
+  })
+  let requests = 0
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch() {
+      requests++
+      if (requests === 2) await secondReady
+      return Response.json({ text: requests === 1 ? 'first' : 'second' })
+    },
+  })
+  servers.push(server)
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, 'index.ts'),
+      join(directory, 'voice.wav'),
+      '--split',
+      '1',
+      '--codex-home',
+      directory,
+      '--base-url',
+      String(server.url),
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  const reader = child.stdout.getReader()
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    const first = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('First chunk was not streamed')), 4000)
+      }),
+    ])
+    expect(new TextDecoder().decode(first.value)).toBe('first\n')
+    releaseSecond()
+    let rest = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      rest += new TextDecoder().decode(value)
+    }
+    expect(rest).toBe('second\n')
+    expect(await child.exited).toBe(0)
+    expect(await new Response(child.stderr).text()).toBe('')
+  } finally {
+    clearTimeout(timeout)
+    releaseSecond()
+    child.kill()
+    await child.exited
+    reader.releaseLock()
+  }
+})
+
+test('JSON CLI output remains a single complete document with ordered chunks', async () => {
+  const directory = await fixture({ tokens: { access_token: 'test-token' } })
+  await writeFile(join(directory, 'voice.wav'), wav(1.5))
+  let requests = 0
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch() {
+      return Response.json({ text: `chunk ${++requests}` })
+    },
+  })
+  servers.push(server)
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      join(import.meta.dir, 'index.ts'),
+      join(directory, 'voice.wav'),
+      '--split',
+      '1',
+      '--json',
+      '--codex-home',
+      directory,
+      '--base-url',
+      String(server.url),
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  const output = await new Response(child.stdout).text()
+  expect(await child.exited).toBe(0)
+  expect(JSON.parse(output)).toEqual({
+    text: 'chunk 1\nchunk 2',
+    chunks: [{ text: 'chunk 1' }, { text: 'chunk 2' }],
+  })
+})
