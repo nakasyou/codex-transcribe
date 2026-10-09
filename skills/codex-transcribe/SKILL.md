@@ -1,6 +1,6 @@
 ---
 name: codex-transcribe
-description: "Transcribe recorded audio files using the ChatGPT authentication stored by Codex. Use when asked to transcribe audio via nakasyou/codex-transcribe, including Japanese recordings and long-file chunking."
+description: 'Transcribe recorded audio files using the ChatGPT authentication stored by Codex. Use when asked to transcribe audio via nakasyou/codex-transcribe, including Japanese recordings and long-file chunking.'
 version: 1.0.0
 author: nakasyou
 license: MIT
