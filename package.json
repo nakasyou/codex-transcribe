@@ -1,14 +1,14 @@
 {
-  "name": "@nakasyou/codex-transcribe",
+  "name": "@nakasyou/ntranscribe",
   "version": "0.1.0",
-  "description": "Transcribe audio using your local Codex ChatGPT authentication",
+  "description": "Transcribe audio with Codex or Chrome speech recognition",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nakasyou/codex-transcribe.git"
+    "url": "git+https://github.com/nakasyou/ntransctibe.git"
   },
   "bin": {
-    "codex-transcribe": "./dist/index.mjs"
+    "ntranscribe": "./dist/index.mjs"
   },
   "files": [
     "dist"

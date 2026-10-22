@@ -6,13 +6,24 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { parseArgs, promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { recognizeFlac, type RecognitionEvent } from './chrome'
+
+export { recognizeFlac, type RecognitionEvent } from './chrome'
+export type Provider = 'codex' | 'chrome-recognizetion'
+
+export function parseProvider(value: string = 'codex'): Provider {
+  if (value === 'chrome-recognition') return 'chrome-recognizetion'
+  if (value === 'codex' || value === 'chrome-recognizetion') return value
+  throw new Error('Unknown provider. Choose codex or chrome-recognizetion.')
+}
 
 export interface TranscribeOptions {
+  provider?: Provider
   language?: string
   userAgent?: string
   codexHome?: string
   baseUrl?: string
-  timeoutMs?: number
+  timeoutMs?: number | null
   splitSeconds?: number
   onChunk?: (chunk: Transcription, index: number) => void | Promise<void>
 }
@@ -23,6 +34,7 @@ export interface Transcription {
   asset_ttl?: string
   asset_format?: string
   chunks?: Transcription[]
+  events?: RecognitionEvent[]
 }
 
 // Mirrors the desktop bootstrap's OS labels and User-Agent shape. Omit
@@ -94,12 +106,21 @@ export async function transcribe(
   audioPath: string,
   options: TranscribeOptions = {},
 ): Promise<Transcription> {
-  if (options.splitSeconds === undefined) return transcribeFile(audioPath, options)
-  const seconds = options.splitSeconds
+  const provider = parseProvider(options.provider)
+  options = { ...options, provider }
+  if (
+    options.timeoutMs !== undefined &&
+    options.timeoutMs !== null &&
+    (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)
+  ) {
+    throw new Error('timeoutMs must be a positive number or null.')
+  }
+  const seconds = options.splitSeconds ?? (provider === 'chrome-recognizetion' ? 600 : undefined)
+  if (seconds === undefined) return transcribeFile(audioPath, options)
   if (!Number.isFinite(seconds) || seconds <= 0) {
     throw new Error('--split must be a positive number of seconds.')
   }
-  const directory = await mkdtemp(join(tmpdir(), 'codex-transcribe-'))
+  const directory = await mkdtemp(join(tmpdir(), 'ntranscribe-'))
   try {
     try {
       await promisify(execFile)('ffmpeg', [
@@ -164,6 +185,7 @@ async function transcribeFile(
   audioPath: string,
   options: TranscribeOptions,
 ): Promise<Transcription> {
+  if (options.provider === 'chrome-recognizetion') return transcribeChromeFile(audioPath, options)
   const baseUrl =
     options.baseUrl ?? process.env.CODEX_API_BASE_URL ?? 'https://chatgpt.com/backend-api'
   const endpoint = new URL(`${baseUrl.replace(/\/+$/, '')}/transcribe`)
@@ -205,8 +227,7 @@ async function transcribeFile(
   const headers: Record<string, string> = {
     Authorization: `Bearer ${auth.tokens.access_token}`,
     originator: 'Codex Desktop',
-    'User-Agent':
-      options.userAgent ?? process.env.CODEX_TRANSCRIBE_USER_AGENT ?? desktopUserAgent(),
+    'User-Agent': options.userAgent ?? process.env.NTRANSCRIBE_USER_AGENT ?? desktopUserAgent(),
   }
   if (auth.tokens.account_id) headers['ChatGPT-Account-ID'] = auth.tokens.account_id
   let response: Response
@@ -216,7 +237,8 @@ async function transcribeFile(
       headers,
       body: form,
       redirect: 'error',
-      signal: AbortSignal.timeout(options.timeoutMs ?? 90_000),
+      signal:
+        options.timeoutMs === null ? undefined : AbortSignal.timeout(options.timeoutMs ?? 90_000),
     })
   } catch {
     throw new Error('Transcription request failed or timed out.')
@@ -241,24 +263,85 @@ async function transcribeFile(
   return result as Transcription
 }
 
-const help = `Usage: codex-transcribe <audio-file> [options]
+async function transcribeChromeFile(
+  audioPath: string,
+  options: TranscribeOptions,
+): Promise<Transcription> {
+  const directory = await mkdtemp(join(tmpdir(), 'ntranscribe-chrome-'))
+  try {
+    const output = join(directory, 'audio.flac')
+    try {
+      await promisify(execFile)('ffmpeg', [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-nostdin',
+        '-i',
+        resolve(audioPath),
+        '-map',
+        '0:a:0',
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        '-sample_fmt',
+        's16',
+        output,
+      ])
+    } catch (error) {
+      throw new Error(
+        error instanceof Error && 'code' in error && error.code === 'ENOENT'
+          ? 'ffmpeg is required for Chrome recognition. Install ffmpeg or use the Nix package.'
+          : 'Unable to convert audio to FLAC with ffmpeg.',
+      )
+    }
+    const events: RecognitionEvent[] = []
+    const segments: string[] = []
+    for await (const event of recognizeFlac(await readFile(output), {
+      language: options.language,
+      timeoutMs: options.timeoutMs,
+    })) {
+      events.push(event)
+      for (const result of event.result ?? []) {
+        if (result.final) segments.push(result.alternative?.[0]?.transcript ?? '')
+      }
+    }
+    return {
+      text: segments
+        .map((text) => text.trim())
+        .filter(Boolean)
+        .join(' '),
+      events,
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+const help = `Usage: ntranscribe <audio-file> [options]
 
 Options:
+  --provider <name>    codex (default) or chrome-recognizetion
+  --timeout <seconds>  Overall request timeout per chunk; 0 disables (Codex: 90, Chrome: disabled)
   --language <code>     Language hint (e.g. ja, en)
-  --split <seconds>     Split audio into chunks and transcribe them in order (requires ffmpeg)
+  --split <seconds>     Chunk duration (Chrome default: 600; requires ffmpeg)
   --user-agent <value>  Override the desktop-compatible User-Agent
   --json                Print the full JSON response
   --codex-home <path>   Authentication directory (default: CODEX_HOME or ~/.codex)
   --base-url <url>      API base URL (default: CODEX_API_BASE_URL or https://chatgpt.com/backend-api)
   -h, --help            Show this help
 
-Uses Codex ChatGPT authentication from auth.json. Does not refresh or modify credentials.`
+Codex uses auth.json. Chrome uses its bundled API key and requires ffmpeg.
+Chrome converts audio to FLAC and splits into 10-minute chunks by default.`
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
     options: {
+      provider: { type: 'string' },
+      timeout: { type: 'string' },
       language: { type: 'string' },
       split: { type: 'string' },
       json: { type: 'boolean' },
@@ -273,21 +356,30 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     return
   }
   if (positionals.length !== 1) throw new Error(help)
+  const provider = parseProvider(values.provider)
+  const timeout = values.timeout === undefined ? undefined : Number(values.timeout)
+  if (
+    timeout !== undefined &&
+    (!values.timeout?.trim() || !Number.isFinite(timeout) || timeout < 0)
+  ) {
+    throw new Error('--timeout must be a non-negative number of seconds (0 disables).')
+  }
   const result = await transcribe(positionals[0]!, {
+    provider,
+    timeoutMs: timeout === 0 ? null : timeout === undefined ? undefined : timeout * 1000,
     language: values.language,
     splitSeconds: values.split === undefined ? undefined : Number(values.split),
     codexHome: values['codex-home'],
     baseUrl: values['base-url'],
     userAgent: values['user-agent'],
-    onChunk:
-      !values.json && values.split !== undefined
-        ? (chunk) => {
-            if (chunk.text.trim()) console.log(chunk.text.trim())
-          }
-        : undefined,
+    onChunk: !values.json
+      ? (chunk) => {
+          if (chunk.text.trim()) console.log(chunk.text.trim())
+        }
+      : undefined,
   })
   if (values.json) console.log(JSON.stringify(result, null, 2))
-  else if (values.split === undefined) console.log(result.text)
+  else if (!result.chunks) console.log(result.text)
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {

@@ -12,7 +12,7 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })))
 })
 async function fixture(auth: unknown) {
-  const directory = await mkdtemp(join(tmpdir(), 'codex-transcribe-test-'))
+  const directory = await mkdtemp(join(tmpdir(), 'ntranscribe-test-'))
   directories.push(directory)
   await writeFile(join(directory, 'auth.json'), JSON.stringify(auth))
   await writeFile(join(directory, 'voice.wav'), 'test audio')
@@ -120,9 +120,7 @@ function wav(seconds: number): Uint8Array {
 
 async function splitDirectories() {
   return (await readdir(tmpdir()))
-    .filter(
-      (name) => name.startsWith('codex-transcribe-') && !name.startsWith('codex-transcribe-test-'),
-    )
+    .filter((name) => name.startsWith('ntranscribe-') && !name.startsWith('ntranscribe-test-'))
     .sort()
 }
 
