@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 export interface TranscribeOptions {
   language?: string
+  userAgent?: string
   codexHome?: string
   baseUrl?: string
   timeoutMs?: number
@@ -22,6 +23,38 @@ export interface Transcription {
   asset_ttl?: string
   asset_format?: string
   chunks?: Transcription[]
+}
+
+// Mirrors the desktop bootstrap's OS labels and User-Agent shape. Omit
+// the version when unknown instead of pinning a stale desktop release.
+export function desktopUserAgent(
+  platform: string = process.platform,
+  arch: string = process.arch,
+  version: string | undefined = process.env.CODEX_APP_VERSION,
+): string {
+  const platforms: Record<string, string> = {
+    darwin: 'Mac OS',
+    linux: 'X11; Linux',
+    win32: 'Windows NT 10.0',
+  }
+  const release = version?.trim()
+  return `Codex Desktop${release ? `/${release}` : ''} (${platforms[platform] ?? platform}; ${arch})`
+}
+
+export class TranscriptionHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly browserChallenge: boolean,
+    public readonly retryAfter: string | null,
+  ) {
+    const hint = browserChallenge
+      ? ' The server requested a browser challenge; check the desktop User-Agent and network route.'
+      : status === 401
+        ? ' Sign in again with codex login.'
+        : ''
+    super(`Transcription failed (HTTP ${status}).${hint}`)
+    this.name = 'TranscriptionHttpError'
+  }
 }
 
 interface Auth {
@@ -172,6 +205,8 @@ async function transcribeFile(
   const headers: Record<string, string> = {
     Authorization: `Bearer ${auth.tokens.access_token}`,
     originator: 'Codex Desktop',
+    'User-Agent':
+      options.userAgent ?? process.env.CODEX_TRANSCRIBE_USER_AGENT ?? desktopUserAgent(),
   }
   if (auth.tokens.account_id) headers['ChatGPT-Account-ID'] = auth.tokens.account_id
   let response: Response
@@ -188,8 +223,11 @@ async function transcribeFile(
   }
   if (!response.ok) {
     await response.body?.cancel()
-    const hint = response.status === 401 ? ' Sign in again with codex login.' : ''
-    throw new Error(`Transcription failed (HTTP ${response.status}).${hint}`)
+    throw new TranscriptionHttpError(
+      response.status,
+      response.headers.get('cf-mitigated') === 'challenge',
+      response.headers.get('retry-after'),
+    )
   }
   const result: unknown = await response.json()
   if (
@@ -208,6 +246,7 @@ const help = `Usage: codex-transcribe <audio-file> [options]
 Options:
   --language <code>     Language hint (e.g. ja, en)
   --split <seconds>     Split audio into chunks and transcribe them in order (requires ffmpeg)
+  --user-agent <value>  Override the desktop-compatible User-Agent
   --json                Print the full JSON response
   --codex-home <path>   Authentication directory (default: CODEX_HOME or ~/.codex)
   --base-url <url>      API base URL (default: CODEX_API_BASE_URL or https://chatgpt.com/backend-api)
@@ -225,6 +264,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
       json: { type: 'boolean' },
       'codex-home': { type: 'string' },
       'base-url': { type: 'string' },
+      'user-agent': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   })
@@ -238,6 +278,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     splitSeconds: values.split === undefined ? undefined : Number(values.split),
     codexHome: values['codex-home'],
     baseUrl: values['base-url'],
+    userAgent: values['user-agent'],
     onChunk:
       !values.json && values.split !== undefined
         ? (chunk) => {

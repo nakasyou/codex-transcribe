@@ -32,13 +32,14 @@ bun run start -- recording.wav --language ja
 
 The CLI prints transcription text by default. `--json` prints the complete API response, including any asset metadata.
 
-| Option                | Description                                                                     |
-| --------------------- | ------------------------------------------------------------------------------- |
-| `--language <code>`   | Optional language hint, such as `ja` or `en`                                    |
-| `--json`              | Print the complete JSON response                                                |
-| `--codex-home <path>` | Directory containing `auth.json`; defaults to `CODEX_HOME` or `~/.codex`        |
-| `--base-url <url>`    | API base; defaults to `CODEX_API_BASE_URL` or `https://chatgpt.com/backend-api` |
-| `-h`, `--help`        | Show usage                                                                      |
+| Option                 | Description                                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `--language <code>`    | Optional language hint, such as `ja` or `en`                                                                                   |
+| `--user-agent <value>` | Override the desktop-compatible User-Agent; defaults to `CODEX_TRANSCRIBE_USER_AGENT` or a generated desktop OS/CPU identifier |
+| `--json`               | Print the complete JSON response                                                                                               |
+| `--codex-home <path>`  | Directory containing `auth.json`; defaults to `CODEX_HOME` or `~/.codex`                                                       |
+| `--base-url <url>`     | API base; defaults to `CODEX_API_BASE_URL` or `https://chatgpt.com/backend-api`                                                |
+| `-h`, `--help`         | Show usage                                                                                                                     |
 
 Audio is uploaded as multipart `file` with an optional `language` field to `/transcribe`. Authentication uses `tokens.access_token` and, if present, `tokens.account_id`. Credentials are read only when invoked and never copied into the build. This tool does not refresh tokens; run `codex login` again if authentication expires.
 
@@ -60,3 +61,9 @@ nix run . -- --help
 Vite+ handles lint, formatting, type checking, and package bundling. Formatting uses `singleQuote: true` and `semi: false`. The runtime has no external dependencies. The Nix build bundles the TypeScript source with Bun without downloading npm dependencies.
 
 The manually dispatched `publish.yml` workflow bumps an existing npm release and publishes with npm trusted publishing. Before using it, configure npm's trusted publisher for owner `nakasyou`, repository `codex-transcribe`, workflow `publish.yml`, allowing `npm publish`. An initial npm publication must exist before the bump workflow can run.
+
+### Desktop request compatibility
+
+Requests include `originator: Codex Desktop` and a desktop-compatible `User-Agent`, matching the installed desktop ASAR's multipart transcription flow. The default uses OS/CPU labels from the desktop bootstrap; `CODEX_APP_VERSION`, when set, supplies the version. No desktop version is hardcoded. `--user-agent` overrides `CODEX_TRANSCRIBE_USER_AGENT` and the generated value.
+
+A missing desktop User-Agent can receive a Cloudflare browser challenge before reaching the transcription API. HTTP errors expose only status, challenge detection and `Retry-After` metadata, never response bodies or credentials. This does not solve browser challenges or guarantee access; the tool does not copy session cookies, manufacture integrity state, or change the installed desktop app.
