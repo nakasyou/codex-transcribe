@@ -3,7 +3,7 @@ import { rejects } from 'node:assert/strict'
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readAuth, transcribe } from './index'
+import { desktopUserAgent, TranscriptionHttpError, readAuth, transcribe } from './index'
 
 const directories: string[] = []
 const servers: ReturnType<typeof Bun.serve>[] = []
@@ -29,6 +29,7 @@ test('uploads audio and language with Codex authentication and preserves API met
     async fetch(request) {
       expect(new URL(request.url).pathname).toBe('/backend-api/transcribe')
       expect(request.method).toBe('POST')
+      expect(request.headers.get('user-agent')).toStartWith('Codex Desktop')
       expect(request.headers.get('authorization')).toBe('Bearer test-token')
       expect(request.headers.get('chatgpt-account-id')).toBe('test-account')
       const form = await request.formData()
@@ -288,4 +289,44 @@ test('JSON CLI output remains a single complete document with ordered chunks', a
     text: 'chunk 1\nchunk 2',
     chunks: [{ text: 'chunk 1' }, { text: 'chunk 2' }],
   })
+})
+
+test('desktop User-Agent follows ASAR platform labels without inventing a version', () => {
+  expect(desktopUserAgent('linux', 'x64', '')).toBe('Codex Desktop (X11; Linux; x64)')
+  expect(desktopUserAgent('darwin', 'arm64', '26.917.71314')).toBe(
+    'Codex Desktop/26.917.71314 (Mac OS; arm64)',
+  )
+  expect(desktopUserAgent('win32', 'x64', ' ')).toBe('Codex Desktop (Windows NT 10.0; x64)')
+})
+
+test('allows an explicit User-Agent and preserves safe challenge diagnostics', async () => {
+  const directory = await fixture({ tokens: { access_token: 'do-not-expose' } })
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(request) {
+      expect(request.headers.get('user-agent')).toBe('Codex Desktop/test (X11; Linux; x64)')
+      return new Response('do-not-expose', {
+        status: 403,
+        headers: { 'cf-mitigated': 'challenge', 'retry-after': '60' },
+      })
+    },
+  })
+  servers.push(server)
+  try {
+    await transcribe(join(directory, 'voice.wav'), {
+      codexHome: directory,
+      baseUrl: String(server.url),
+      userAgent: 'Codex Desktop/test (X11; Linux; x64)',
+    })
+    throw new Error('Expected an HTTP error')
+  } catch (error) {
+    expect(error).toBeInstanceOf(TranscriptionHttpError)
+    const failure = error as TranscriptionHttpError
+    expect(failure.status).toBe(403)
+    expect(failure.browserChallenge).toBe(true)
+    expect(failure.retryAfter).toBe('60')
+    expect(failure.message).toContain('browser challenge')
+    expect(failure.message).not.toContain('do-not-expose')
+  }
 })
