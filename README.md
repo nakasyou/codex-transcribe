@@ -132,3 +132,27 @@ Protocol references:
 
 - [Chromium network recognition engine](https://github.com/chromium/chromium/blob/main/content/browser/speech/network_speech_recognition_engine_impl.cc)
 - [Chromium recognition protobuf schema](https://github.com/chromium/chromium/blob/main/content/public/browser/google_streaming_api.proto)
+
+### Adding a provider
+
+```text
+src/
+  index.ts              CLI and public exports
+  transcribe.ts         Splitting, ordering, callbacks, and temporary-file cleanup
+  types.ts              Shared provider contract and result types
+  providers/
+    index.ts            Provider registry, aliases, and name validation
+    codex.ts            Codex authentication and requests
+    chrome.ts           FLAC conversion, Chrome transport, and protobuf decoding
+```
+
+Implement `TranscriptionProvider` in `src/providers/<name>.ts` and add its object
+to the `providers` array in `src/providers/index.ts`. The registry determines the
+CLI's accepted provider names, aliases, and the TypeScript `Provider` union.
+The shared transcription flow uses each provider's `defaultSplitSeconds` and
+`transcribeFile()` method, so adding a provider does not require another branch
+in the CLI or splitting code.
+
+Every provider returns `{ text }` and may include its own response metadata.
+Shared request options are `language` and `timeoutMs`; provider-specific options
+and response types live alongside the corresponding implementation.

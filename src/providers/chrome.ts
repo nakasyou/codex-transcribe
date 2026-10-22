@@ -1,3 +1,9 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
+import type { ProviderOptions, Transcription, TranscriptionProvider } from '../types'
 import { randomBytes } from 'node:crypto'
 
 // Extracted from the installed Google Chrome 155 binary (GOOGLE_API_KEY).
@@ -190,3 +196,70 @@ export async function* recognizeFlac(
     await Promise.allSettled([downstream, upstream])
   }
 }
+
+export interface ChromeTranscription extends Transcription {
+  events: RecognitionEvent[]
+}
+
+async function transcribeChromeFile(
+  audioPath: string,
+  options: ProviderOptions,
+): Promise<ChromeTranscription> {
+  const directory = await mkdtemp(join(tmpdir(), 'ntranscribe-chrome-'))
+  try {
+    const output = join(directory, 'audio.flac')
+    try {
+      await promisify(execFile)('ffmpeg', [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-nostdin',
+        '-i',
+        resolve(audioPath),
+        '-map',
+        '0:a:0',
+        '-vn',
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        '-sample_fmt',
+        's16',
+        output,
+      ])
+    } catch (error) {
+      throw new Error(
+        error instanceof Error && 'code' in error && error.code === 'ENOENT'
+          ? 'ffmpeg is required for Chrome recognition. Install ffmpeg or use the Nix package.'
+          : 'Unable to convert audio to FLAC with ffmpeg.',
+      )
+    }
+    const events: RecognitionEvent[] = []
+    const segments: string[] = []
+    for await (const event of recognizeFlac(await readFile(output), {
+      language: options.language,
+      timeoutMs: options.timeoutMs,
+    })) {
+      events.push(event)
+      for (const result of event.result ?? []) {
+        if (result.final) segments.push(result.alternative?.[0]?.transcript ?? '')
+      }
+    }
+    return {
+      text: segments
+        .map((text) => text.trim())
+        .filter(Boolean)
+        .join(' '),
+      events,
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+export const chromeProvider = {
+  id: 'chrome-recognizetion',
+  aliases: ['chrome-recognition'],
+  defaultSplitSeconds: 600,
+  transcribeFile: transcribeChromeFile,
+} as const satisfies TranscriptionProvider

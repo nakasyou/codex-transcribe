@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decodeEvents, decodeRecognitionEvent, recognizeFlac } from './chrome'
-import { main, parseProvider, transcribe } from './index'
+import { main, parseProvider, transcribe } from '../index'
 
 const directories: string[] = []
 let restoreFetch: (() => void) | undefined
